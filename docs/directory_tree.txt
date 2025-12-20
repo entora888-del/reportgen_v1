@@ -1,0 +1,76 @@
+.
+├── .vscode/
+│   └── settings.json
+├── build/
+├── data/
+│   ├── cache/
+│   └── samples/
+├── dist/
+├── docs/
+│   ├── directory_tree.txt
+│   └── reportgen_status.md
+├── scripts/
+│   └── build_win.ps1
+├── src/
+│   ├── reportgen/
+│   │   ├── assets/
+│   │   │   └── reportgen_icon.png
+│   │   ├── config/
+│   │   │   ├── loader.py
+│   │   │   └── settings.json
+│   │   ├── gui/
+│   │   │   ├── app.py
+│   │   │   └── widgets.py
+│   │   ├── logs/
+│   │   ├── nlftp/
+│   │   │   └── fetcher.py
+│   │   ├── parsers/
+│   │   │   ├── boring_xml.py
+│   │   │   └── liquefaction_pdf.py
+│   │   ├── templates/
+│   │   │   ├── bk/
+│   │   │   │   ├── 報告書_ひな形.docx
+│   │   │   │   ├── 報告書_ひな形_v2.docx
+│   │   │   │   └── 報告書_ひな形_v2_fixed.docx
+│   │   │   ├── DATA.XML
+│   │   │   ├── ~$書_ひな形_v2.docx
+│   │   │   ├── 報告書_ひな形_v2.docx
+│   │   │   ├── 報告書_ひな形_v2_working.tmp
+│   │   │   ├── 報告書_正解.docx
+│   │   │   ├── 液状化.DAT
+│   │   │   └── 液状化判定プリントアウト.pdf
+│   │   ├── utils/
+│   │   │   ├── pathnorm.py
+│   │   │   └── template_locator.py
+│   │   ├── wordgen/
+│   │   │   ├── liquefaction_post.py
+│   │   │   ├── post_edit.py
+│   │   │   └── templater.py
+│   │   └── __init__.py
+│   ├── reportgen.egg-info/
+│   │   ├── dependency_links.txt
+│   │   ├── PKG-INFO
+│   │   ├── requires.txt
+│   │   ├── SOURCES.txt
+│   │   └── top_level.txt
+│   ├── aaaa
+│   ├── WSL_SENTINEL.txt
+│   ├── 生成_報告書_5.docx
+│   ├── 生成_報告書_6.docx
+│   ├── 生成_報告書_7.docx
+│   └── 生成_報告書_8.docx
+├── tests/
+│   ├── test_pdf.py
+│   └── test_xml.py
+├── aaa.docx
+├── pyproject.toml
+├── ~$生成_報告書.docx
+├── キャプチャ.png
+├── キャプチャ2.png
+├── 生成_報告書.docx
+├── 生成_報告書_10.docx
+├── 生成_報告書_11.docx
+├── 生成_報告書_12.docx
+├── 生成_報告書_13.docx
+├── 生成_報告書_8.docx
+└── 生成_報告書_9.docx

@@ -1,0 +1,32 @@
+# Environments and tooling
+.venv/
+.codex/
+.vscode/
+.pytest_cache/
+__pycache__/
+*.pyc
+
+# Build / packaging outputs
+dist/
+build/
+tmp/
+src/reportgen.egg-info/
+
+# OS noise
+.DS_Store
+desktop.ini
+
+# Local data and large artifacts (keep code lean)
+data/
+booklets/
+
+# Generated documents and images (ignore broadly, keep curated templates/assets)
+*.docx
+*.pdf
+*.png
+*.tmp
+~$*
+!src/reportgen/templates/**/*.docx
+!src/reportgen/templates/**/*.pdf
+!src/reportgen/templates/**/*.DAT
+!src/reportgen/assets/*.png
