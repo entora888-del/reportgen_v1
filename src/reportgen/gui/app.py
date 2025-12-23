@@ -2,11 +2,11 @@ import sys, traceback, tempfile, os, subprocess, html
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QObject, QThread, Signal
-from PySide6.QtGui import QIcon, QGuiApplication
+from PySide6.QtGui import QIcon, QGuiApplication, QFont
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFileDialog, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QTextBrowser, QMessageBox, QGroupBox,
-    QGridLayout, QCheckBox, QSizePolicy, QStyle, QScrollArea
+    QGridLayout, QCheckBox, QSizePolicy, QStyle, QScrollArea, QComboBox
 )
 
 from reportgen.parsers.liquefaction_pdf import summarize_liquefaction_pdf
@@ -85,6 +85,74 @@ class BookletFetchWorker(QObject):
             self.failed.emit(str(exc))
 
 
+class ModelFetchWorker(QObject):
+    completed = Signal(list)
+    failed = Signal(str)
+
+    def __init__(self, api_key: str, base_choices: list[tuple[str, str]], max_models: int = 10):
+        super().__init__()
+        self.api_key = api_key
+        self.base_choices = base_choices
+        self.max_models = max(1, max_models)
+
+    def run(self):
+        try:
+            from openai import OpenAI
+        except ImportError:
+            self.completed.emit(self.base_choices)
+            return
+
+        try:
+            client = OpenAI(api_key=self.api_key)
+            resp = client.models.list()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+
+        seen: set[str] = set()
+        dynamic: list[tuple[str, str]] = []
+        for entry in getattr(resp, "data", []) or []:
+            model_id = getattr(entry, "id", None) or getattr(entry, "model", None)
+            if not isinstance(model_id, str):
+                continue
+            if not model_id.startswith("gpt-"):
+                continue
+            if any(x in model_id for x in ("-tts", "-audio", "-whisper", "-embedding", "-realtime")):
+                continue  # 音声/埋め込み系は除外
+            if model_id in seen:
+                continue
+            seen.add(model_id)
+            dynamic.append((model_id, self._label(model_id)))
+
+        dynamic.sort(key=lambda x: x[0], reverse=True)
+        dynamic = dynamic[: self.max_models]
+        seen = {m for m, _ in dynamic}
+
+        merged: list[tuple[str, str]] = []
+        merged.extend(dynamic)
+        for item in self.base_choices:
+            if len(merged) >= self.max_models:
+                break
+            if item[0] in seen:
+                continue
+            merged.append(item)
+            seen.add(item[0])
+        if not merged:
+            merged = self.base_choices
+        self.completed.emit(merged)
+
+    def _label(self, model_id: str) -> str:
+        if "5.2" in model_id:
+            return f"{model_id}（最新・高精度）"
+        if "4.1" in model_id and "mini" not in model_id:
+            return f"{model_id}（高精度）"
+        if "4o" in model_id and "mini" not in model_id:
+            return f"{model_id}（マルチモーダル対応）"
+        if "mini" in model_id:
+            return f"{model_id}（軽量）"
+        return model_id
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -104,7 +172,17 @@ class MainWindow(QMainWindow):
         self.booklet_buffer_m = max(0.0, float(os.environ.get("REPORTGEN_BOOKLET_BUFFER", "200")))
         self.booklet_code_field = os.environ.get("REPORTGEN_BOOKLET_CODE_FIELD", "code")
         self.booklet_name_field = os.environ.get("REPORTGEN_BOOKLET_NAME_FIELD", "name")
-        self.default_ai_model = os.environ.get("REPORTGEN_AI_MODEL", "gpt-4o-mini")
+        self.default_out_dir = Path(os.environ.get("REPORTGEN_OUT_DIR", str(Path.cwd() / "output"))).expanduser()
+        self.default_out_dir.mkdir(parents=True, exist_ok=True)
+        self.ai_model_choices: list[tuple[str, str]] = [
+            ("gpt-5.2", "gpt-5.2（最新・高精度）"),
+            ("gpt-4.1", "gpt-4.1（高精度）"),
+            ("gpt-4.1-mini", "gpt-4.1-mini（高速・安価）"),
+            ("gpt-4o", "gpt-4o（マルチモーダル対応）"),
+            ("gpt-4o-mini", "gpt-4o-mini（軽量）"),
+        ]
+        self.latest_ai_model = self.ai_model_choices[0][0]
+        self.default_ai_model = os.environ.get("REPORTGEN_AI_MODEL", self.latest_ai_model)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -132,6 +210,7 @@ class MainWindow(QMainWindow):
         body.addLayout(right_col, 2)
 
         inputs_box = QGroupBox("入力ファイル")
+        self._style_group_box(inputs_box)
         inputs_layout = QGridLayout()
         inputs_layout.setHorizontalSpacing(12)
         inputs_layout.setVerticalSpacing(12)
@@ -141,26 +220,27 @@ class MainWindow(QMainWindow):
         left_col.addWidget(inputs_box)
 
         self.ed_xml, btn_xml = self._build_path_row(self.pick_xml, (".xml",), "XML をドラッグ＆ドロップ")
-        inputs_layout.addWidget(QLabel("ボーリングXML"), 0, 0)
+        inputs_layout.addWidget(QLabel("📄 ボーリングXML"), 0, 0)
         inputs_layout.addWidget(self.ed_xml, 0, 1)
         inputs_layout.addWidget(btn_xml, 0, 2)
 
         self.ed_pdf, btn_pdf = self._build_path_row(self.pick_pdf, (".pdf",), "液状化判定 PDF（任意）")
-        inputs_layout.addWidget(QLabel("液状化PDF（任意）"), 1, 0)
+        inputs_layout.addWidget(QLabel("🧾 液状化PDF（任意）"), 1, 0)
         inputs_layout.addWidget(self.ed_pdf, 1, 1)
         inputs_layout.addWidget(btn_pdf, 1, 2)
 
         self.ed_tpl, btn_tpl = self._build_path_row(self.pick_tpl, (".docx",), "指定しない場合は同梱テンプレートを使用")
-        inputs_layout.addWidget(QLabel("テンプレ（既定あり）"), 2, 0)
+        inputs_layout.addWidget(QLabel("🗂️ テンプレ（既定あり）"), 2, 0)
         inputs_layout.addWidget(self.ed_tpl, 2, 1)
         inputs_layout.addWidget(btn_tpl, 2, 2)
 
         self.ed_out, btn_out = self._build_path_row(self.pick_out, (), "保存先ファイル名を指定")
-        inputs_layout.addWidget(QLabel("出力（.docx）"), 3, 0)
+        inputs_layout.addWidget(QLabel("💾 出力（.docx）"), 3, 0)
         inputs_layout.addWidget(self.ed_out, 3, 1)
         inputs_layout.addWidget(btn_out, 3, 2)
 
         options_box = QGroupBox("オプション")
+        self._style_group_box(options_box)
         options_layout = QVBoxLayout()
         options_layout.setContentsMargins(20, 16, 20, 16)
         options_layout.setSpacing(10)
@@ -170,6 +250,7 @@ class MainWindow(QMainWindow):
         left_col.addWidget(options_box)
 
         ai_box = QGroupBox("AI 文章生成（実験）")
+        self._style_group_box(ai_box)
         ai_layout = QGridLayout()
         ai_layout.setContentsMargins(20, 16, 20, 16)
         ai_layout.setHorizontalSpacing(12)
@@ -180,25 +261,29 @@ class MainWindow(QMainWindow):
         self.chk_ai_enable = QCheckBox("自由記述に OpenAI API を使用する")
         ai_layout.addWidget(self.chk_ai_enable, 0, 0, 1, 2)
 
-        ai_layout.addWidget(QLabel("API キー"), 1, 0)
+        ai_layout.addWidget(QLabel("🔑 API キー"), 1, 0)
         self.ed_ai_key = QLineEdit()
         self.ed_ai_key.setEchoMode(QLineEdit.Password)
         self.ed_ai_key.setPlaceholderText("sk- から始まるキー")
         self.ed_ai_key.setText(os.environ.get("OPENAI_API_KEY", ""))
         ai_layout.addWidget(self.ed_ai_key, 1, 1)
 
-        ai_layout.addWidget(QLabel("モデル名"), 2, 0)
-        self.ed_ai_model = QLineEdit()
-        self.ed_ai_model.setPlaceholderText("例: gpt-4o-mini / gpt-4.1-mini")
-        self.ed_ai_model.setText(self.default_ai_model)
-        ai_layout.addWidget(self.ed_ai_model, 2, 1)
+        ai_layout.addWidget(QLabel("🤖 モデル名"), 2, 0)
+        self.cmb_ai_model = QComboBox()
+        self.cmb_ai_model.setInsertPolicy(QComboBox.NoInsert)
+        self.cmb_ai_model.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self._populate_ai_models(self.default_ai_model)
+        ai_layout.addWidget(self.cmb_ai_model, 2, 1)
 
-        ai_hint = QLabel("※ API キーは端末内のみで使用し、入力しなければ既定の文章を利用します。")
+        ai_hint = QLabel("※ AI を使う場合は上の「API キー」欄に OpenAI キーを入れてください。未入力時は既定の文章を利用します。")
+        ai_hint.setObjectName("aiHint")
+        ai_hint.setProperty("class", "hintText")
         ai_hint.setWordWrap(True)
         ai_hint.setStyleSheet("color: #5a6376;")
         ai_layout.addWidget(ai_hint, 3, 0, 1, 2)
 
         action_box = QGroupBox("生成アクション")
+        self._style_group_box(action_box)
         action_layout = QVBoxLayout()
         action_layout.setContentsMargins(20, 20, 20, 20)
         action_layout.setSpacing(16)
@@ -220,6 +305,7 @@ class MainWindow(QMainWindow):
         action_layout.addStretch()
 
         booklet_box = QGroupBox("5万図簿冊ダウンロード")
+        self._style_group_box(booklet_box)
         booklet_layout = QVBoxLayout()
         booklet_layout.setContentsMargins(18, 18, 18, 18)
         booklet_layout.setSpacing(12)
@@ -270,6 +356,7 @@ class MainWindow(QMainWindow):
         booklet_layout.addWidget(self.booklet_status_label)
 
         log_box = QGroupBox("アクティビティログ")
+        self._style_group_box(log_box)
         log_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         log_layout = QVBoxLayout()
         log_layout.setContentsMargins(20, 20, 20, 20)
@@ -281,9 +368,11 @@ class MainWindow(QMainWindow):
         self.txt_log.setOpenExternalLinks(True)
         self.txt_log.setPlaceholderText("処理状態や抽出結果がここに表示されます。")
         self.txt_log.setMinimumHeight(340)
+        self._apply_emoji_font(self.txt_log)
         log_layout.addWidget(self.txt_log)
 
         booklet_result_box = QGroupBox("簿冊取得結果")
+        self._style_group_box(booklet_result_box)
         booklet_result_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         booklet_result_layout = QVBoxLayout()
         booklet_result_layout.setContentsMargins(20, 20, 20, 20)
@@ -309,15 +398,18 @@ class MainWindow(QMainWindow):
         default_tpl = resolve_template_path(None)
         self.ed_tpl.setText(str(default_tpl))
 
-        self.ed_out.setText("生成_報告書.docx")
+        self.ed_out.setText(str(self.default_out_dir / "生成_報告書.docx"))
         if self.booklet_index_path:
             self.ed_booklet_index.setText(str(self.booklet_index_path))
         self._update_booklet_paths_label()
         self.booklet_thread: QThread | None = None
         self.booklet_worker: BookletFetchWorker | None = None
+        self.model_thread: QThread | None = None
+        self.model_worker: ModelFetchWorker | None = None
 
         self._update_booklet_paths_label()
         self.tempdir = Path(tempfile.mkdtemp(prefix="reportgen_"))
+        self._start_ai_model_refresh()
 
     # ---- file pickers -------------------------------------------------
     def pick_xml(self):
@@ -336,7 +428,12 @@ class MainWindow(QMainWindow):
             self.ed_tpl.setText(f)
 
     def pick_out(self):
-        f, _ = QFileDialog.getSaveFileName(self, "出力先", "生成_報告書.docx", "Word (*.docx)")
+        f, _ = QFileDialog.getSaveFileName(
+            self,
+            "出力先",
+            str(self.default_out_dir / "生成_報告書.docx"),
+            "Word (*.docx)",
+        )
         if f:
             self.ed_out.setText(f)
 
@@ -356,7 +453,7 @@ class MainWindow(QMainWindow):
         if not api_key:
             raise ValueError("AI 文章生成を利用する場合は OpenAI API キーを入力してください。")
 
-        model = self.ed_ai_model.text().strip() or self.default_ai_model or "gpt-4o-mini"
+        model = (self.cmb_ai_model.currentData() or self.latest_ai_model) or self.default_ai_model
         return AIOptions(enabled=True, api_key=api_key, model=model)
 
     # ---- utils --------------------------------------------------------
@@ -367,12 +464,26 @@ class MainWindow(QMainWindow):
             "error": "#b8323c",
             "success": "#1d7845",
         }
+        icons = {
+            "info": "ℹ️",
+            "warn": "⚠️",
+            "error": "⛔",
+            "success": "✅",
+        }
+        fallback_icons = {
+            "info": "[i]",
+            "warn": "[!]",
+            "error": "[x]",
+            "success": "[ok]",
+        }
         color = colors.get(level, colors["info"])
+        icon = icons.get(level, icons["info"]) or fallback_icons.get(level, "[i]")
         escaped = html.escape(s)
+        prefix = f"{icon} "
         if "\n" in s:
-            self.txt_log.append(f"<pre style='margin:0;color:{color};'>{escaped}</pre>")
+            self.txt_log.append(f"<pre style='margin:0;color:{color};'>{prefix}{escaped}</pre>")
         else:
-            self.txt_log.append(f"<span style='color:{color};'>{escaped}</span>")
+            self.txt_log.append(f"<span style='color:{color};'>{prefix}{escaped}</span>")
 
     # ---- main action --------------------------------------------------
     def run_generate(self):
@@ -385,7 +496,12 @@ class MainWindow(QMainWindow):
 
             tpl_text = self.ed_tpl.text().strip()
             tpl = resolve_template_path(tpl_text or None)  # ←空でも既定が返る
-            out = Path(self.ed_out.text().strip() or "生成_地質調査報告書.docx")
+
+            out_text = self.ed_out.text().strip()
+            out = Path(out_text) if out_text else self.default_out_dir / "生成_地質調査報告書.docx"
+            out = out.expanduser()
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out = self._resolve_unique_out_path(out)
 
             if not xml.exists():
                 raise FileNotFoundError("XML が見つかりません")
@@ -464,7 +580,7 @@ class MainWindow(QMainWindow):
                     context["liq_risk_evaluation"] = ""
 
             # --- 生成 ---
-            generate_docx_from_template(str(tpl), str(out), context, liq_result=liq)
+            generate_docx_from_template(str(tpl), str(out), context, liq_result=liq, source_xml_path=str(xml))
             QMessageBox.information(self, "完了", f"出力しました：\n{out}")
             self.log(f"[OK] {out}", level="success")
 
@@ -644,6 +760,97 @@ class MainWindow(QMainWindow):
         self._update_booklet_paths_label()
         return path
 
+    def _start_ai_model_refresh(self):
+        api_key = self.ed_ai_key.text().strip() or os.environ.get("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            return  # キー未入力時は静的リストのみ利用
+        if self.model_thread:
+            return
+        self.log("[AI] モデル一覧を取得しています…")
+        self.model_thread = QThread(self)
+        self.model_worker = ModelFetchWorker(api_key, self.ai_model_choices.copy(), max_models=10)
+        self.model_worker.moveToThread(self.model_thread)
+        self.model_thread.started.connect(self.model_worker.run)
+        self.model_worker.completed.connect(self._handle_model_refresh)
+        self.model_worker.failed.connect(self._handle_model_refresh_failed)
+        self.model_worker.completed.connect(self.model_thread.quit)
+        self.model_worker.failed.connect(self.model_thread.quit)
+        self.model_worker.completed.connect(self.model_worker.deleteLater)
+        self.model_worker.failed.connect(self.model_worker.deleteLater)
+        self.model_thread.finished.connect(self._cleanup_model_thread)
+        self.model_thread.start()
+
+    def _handle_model_refresh(self, choices: list[tuple[str, str]]):
+        self.ai_model_choices = choices
+        if choices:
+            self.latest_ai_model = choices[0][0]
+        current = self.cmb_ai_model.currentData() or self.default_ai_model or self.latest_ai_model
+        self._populate_ai_models(current)
+        self.log(f"[AI] モデル一覧を更新しました（{len(choices)}件）。", level="success")
+
+    def _handle_model_refresh_failed(self, message: str):
+        self.log(f"[AI] モデル一覧の取得に失敗しました: {message}", level="warn")
+
+    def _cleanup_model_thread(self):
+        if self.model_thread:
+            self.model_thread.deleteLater()
+            self.model_thread = None
+        self.model_worker = None
+
+    def _populate_ai_models(self, selected_model: str | None):
+        if not hasattr(self, "cmb_ai_model"):
+            return
+        self.cmb_ai_model.clear()
+        seen: set[str] = set()
+        for model, label in self.ai_model_choices:
+            self.cmb_ai_model.addItem(label, model)
+            seen.add(model)
+
+        selected = selected_model or self.latest_ai_model
+        if selected not in seen:
+            self.cmb_ai_model.addItem(selected, selected)
+
+        idx = self.cmb_ai_model.findData(selected)
+        if idx < 0:
+            idx = 0
+        self.cmb_ai_model.setCurrentIndex(idx)
+
+    def _style_group_box(self, box: QGroupBox):
+        font = box.font()
+        font.setPointSize(20)
+        font.setBold(True)
+        box.setFont(font)
+
+    def _resolve_unique_out_path(self, path: Path) -> Path:
+        if not path.exists():
+            return path
+        stem = path.stem
+        suffix = path.suffix or ".docx"
+        parent = path.parent
+        for i in range(1, 1000):
+            candidate = parent / f"{stem} ({i}){suffix}"
+            if not candidate.exists():
+                return candidate
+        return path
+
+    def _apply_emoji_font(self, widget: QWidget):
+        try:
+            font = widget.font()
+            families = [
+                "Segoe UI Emoji",
+                "Noto Color Emoji",
+                "Apple Color Emoji",
+                "Segoe UI Symbol",
+                font.family(),
+            ]
+            if hasattr(font, "setFamilies"):
+                font.setFamilies(families)
+            else:  # fallback for older Qt
+                font.setFamily(", ".join(families))
+            widget.setFont(font)
+        except Exception:
+            pass
+
     # ---- ui helpers ---------------------------------------------------
     def _build_header(self):
         layout = QHBoxLayout()
@@ -713,6 +920,41 @@ class MainWindow(QMainWindow):
                 left: 22px;
                 padding: 0 6px;
                 color: #3a435c;
+                font-size: 21px;
+                font-weight: 700;
+            }
+            QGroupBox QLabel {
+                font-size: 18px;
+                color: #3a435c;
+                font-weight: 500;
+            }
+            QCheckBox {
+                font-size: 18px;
+                color: #3a435c;
+            }
+            QComboBox, QLabel {
+                font-size: 18px;
+            }
+            QLabel#heroTitle {
+                font-size: 32px;
+                font-weight: 600;
+                color: #24324b;
+            }
+            QLabel#heroSubtitle {
+                font-size: 19px;
+                color: #5a6376;
+            }
+            QLabel#statusChip {
+                border-radius: 13px;
+                padding: 14px 26px;
+                background-color: #e8ecf7;
+                color: #3a435c;
+                font-size: 17px;
+                letter-spacing: 0.3px;
+            }
+            QLabel.hintText {
+                font-size: 17px;
+                color: #5a6376;
             }
             QLineEdit, QTextBrowser {
                 border: 1px solid #c8cfdb;
@@ -745,14 +987,6 @@ class MainWindow(QMainWindow):
             QPushButton#primaryButton:disabled {
                 background-color: #dce2ef;
                 color: #8a94a9;
-            }
-            QLabel#statusChip {
-                border-radius: 13px;
-                padding: 14px 26px;
-                background-color: #e8ecf7;
-                color: #3a435c;
-                font-size: 17px;
-                letter-spacing: 0.3px;
             }
         """
         )

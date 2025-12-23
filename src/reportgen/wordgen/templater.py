@@ -114,17 +114,6 @@ def build_context_from_inputs(
         number, title, header_full = _format_header(idx, name, top, bottom, thickness)
         section_lines = [header_full]
 
-        obs_sentences = _normalize_sentence(layer.get("observation", ""))
-        observation_text = ""
-        if obs_sentences:
-            first_sentence = obs_sentences[0]
-            if not first_sentence.startswith("本層"):
-                first_sentence = f"本層は、{first_sentence}"
-            observation_text = f"　{first_sentence}"
-            for sentence in obs_sentences[1:]:
-                observation_text += f"　{sentence}"
-            section_lines.append(observation_text)
-
         n_values = [int(v) for v in layer.get("N_values", []) if v is not None]
         n_sentence = ""
         if n_values:
@@ -141,6 +130,27 @@ def build_context_from_inputs(
                     n_sentence = f"　標準貫入試験では、N={n_text}を記録する。"
             if n_sentence:
                 section_lines.append(n_sentence)
+
+        obs_sentences = _normalize_sentence(layer.get("observation", ""))
+        observation_text = ""
+        if obs_sentences:
+            first_sentence = obs_sentences[0]
+            if not first_sentence.startswith("本層"):
+                first_sentence = f"本層は、{first_sentence}"
+            observation_text = f"　{first_sentence}"
+            for sentence in obs_sentences[1:]:
+                observation_text += f"　{sentence}"
+            section_lines.append(observation_text)
+        else:
+            depth_text = ""
+            if top is not None and bottom is not None:
+                depth_text = f"（GL-{top:.2f}～{bottom:.2f}m）"
+            base = f"　本層は、{name}{depth_text}で構成される。"
+            if n_sentence:
+                base = base.rstrip("。")
+                base += n_sentence
+            observation_text = base
+            section_lines.append(observation_text)
 
         layer_entries.append(
             {
@@ -171,20 +181,46 @@ def build_context_from_inputs(
             return value or ""
         return f"{int(round(num))}ｍ"
 
+    def _estimate_spt_tests(length_text: str, layers_info: list[dict]) -> int:
+        max_depth = 0.0
+        for layer in layers_info or []:
+            try:
+                bottom = float(layer.get("bottom") or 0.0)
+                max_depth = max(max_depth, bottom)
+            except (TypeError, ValueError):
+                continue
+        if not length_text and max_depth > 0:
+            length_text = str(max_depth)
+        try:
+            length = float(length_text)
+        except (TypeError, ValueError):
+            return 1
+        return max(1, int(round(length)) + 1)
+
     project_name = _project_name()
     borehole_name = metadata.get("borehole_name", "")
     boring_count = defaults.survey_quantity_boring_count or (1 if borehole_name else 0)
     drilling_length = metadata.get("drilling_length", "")
     spt_sites = defaults.survey_quantity_spt_count or (1 if spt_records else 0)
-    spt_tests = len(spt_records) if spt_records else defaults.survey_quantity_spt_count
+    spt_tests = len(spt_records) if spt_records else _estimate_spt_tests(drilling_length, layers)
 
-    survey_purpose = texts.survey_purpose_template.format(project_name=project_name or "")
+    # 調査概要（テンプレ未設定時も手元の情報から生成）
+    base_project = project_name or metadata.get("survey_name", "") or ""
+    survey_purpose = texts.survey_purpose_template.format(project_name=base_project or "")
     survey_quantity_boring = f"{boring_count}箇所、L＝{_format_meter(drilling_length)}" if boring_count else ""
     survey_quantity_spt = f"{spt_sites}箇所、n＝{spt_tests}回" if spt_sites else ""
 
     survey_location = metadata.get("survey_location", "")
     if survey_location.endswith("地内") and not survey_location.endswith(" 地内"):
         survey_location = survey_location.replace("地内", " 地内")
+
+    location_phrase = survey_location or metadata.get("survey_location", "") or ""
+    if not survey_purpose.strip():
+        project_phrase = base_project or "本調査"
+        survey_purpose = (
+            f"{project_phrase}に関して、{location_phrase or '計画地'}の地盤構成を把握し、"
+            "基礎地盤の検討に必要な資料を得ることを目的とする。"
+        )
 
     layers_detail = ""
 
@@ -196,7 +232,7 @@ def build_context_from_inputs(
                 continue
             for key in ("observation", "n_sentence"):
                 value = override.get(key) or ""
-                if value:
+                if value and not layer_entries[idx].get(key):
                     layer_entries[idx][key] = value
 
     for entry in layer_entries:
@@ -231,8 +267,8 @@ def build_context_from_inputs(
         "survey_quantity_spt": survey_quantity_spt,
         "survey_quantity_liq": defaults.survey_quantity_liq,
         "survey_company_name": metadata.get("survey_company_name") or cover.get("cover_company_name", ""),
-        "survey_company_address": settings.company.address,
-        "survey_company_tel": settings.company.tel or metadata.get("survey_company_tel_xml", ""),
+        "survey_company_address": metadata.get("survey_company_address") or settings.company.address,
+        "survey_company_tel": metadata.get("survey_company_tel_xml", "") or settings.company.tel,
         "survey_company_fax": settings.company.fax,
         "survey_staff_lead": _staff_line(
             "主任技術者",
@@ -262,10 +298,10 @@ def build_context_from_inputs(
         "natural_drilling_depth": metadata.get("natural_drilling_depth", "") or defaults.natural_drilling_depth,
         "groundwater_depth": metadata.get("groundwater_depth", ""),
         "groundwater_note": metadata.get("groundwater_note", "") or defaults.groundwater_note,
-        "area_location_overview": texts.area_location_overview,
-        "area_hydrology_overview": texts.area_hydrology_overview,
-        "area_geology_overview": texts.area_geology_overview,
-        "area_surface_overview": texts.area_surface_overview,
+        "area_location_overview": "【記入】調査地周辺の位置・アクセス等を記載してください。",
+        "area_hydrology_overview": "【記入】周辺の水文・河川状況を記載してください。",
+        "area_geology_overview": "【記入】周辺の地形・地質概要を記載してください。",
+        "area_surface_overview": "【記入】表層地質の概要を記載してください。",
         "drilling_summary": texts.drilling_summary,
         "liq_summary_text": texts.liq_summary_text,
         "liq_conclusion_text": texts.liq_conclusion_text,
@@ -323,11 +359,139 @@ def generate_docx_from_template(
     out_path: str,
     context: dict,
     liq_result: dict | None = None,
+    source_xml_path: str | None = None,
 ):
+    from pathlib import Path
     from docxtpl import DocxTemplate
+    from reportgen.utils.template_locator import packaged_template_path
+    from docx import Document
+    from docx.enum.text import WD_BREAK
 
-    tpl_path = resolve_template_path(template_path)
+    has_liq = bool(liq_result and liq_result.get("cases"))
+
+    template_dir_candidates = []
+    template_from_xml_dir = False
+    if source_xml_path:
+        xml_dir = Path(source_xml_path).expanduser().parent
+        template_dir_candidates = sorted(xml_dir.glob("*.docx"))
+
+    if template_path:
+        tpl_path = resolve_template_path(template_path)
+    else:
+        if template_dir_candidates:
+            tpl_path = template_dir_candidates[0]
+            template_from_xml_dir = True
+        elif has_liq:
+            tpl_path = resolve_template_path(None)
+        else:
+            # 非液状化では「正解」テンプレがあれば優先、無ければ旧版
+            try:
+                tpl_path = packaged_template_path("報告書_正解.docx")
+            except FileNotFoundError:
+                tpl_path = packaged_template_path("報告書_ひな形.docx")
+
     doc = DocxTemplate(str(tpl_path))
     doc.render(context)
     doc.save(out_path)
     postprocess_liquefaction_block(out_path, liq_result)
+
+    if not has_liq and not template_from_xml_dir:
+        _strip_liq_and_debug_sections(out_path)
+        _ensure_chapter_page_breaks(out_path)
+    else:
+        _ensure_chapter_page_breaks(out_path)
+
+
+def _strip_liq_and_debug_sections(out_path: str):
+    """
+    液状化セクションとデバッグ出力（配列表記など）を削除する。
+    """
+    from docx import Document
+
+    try:
+        doc = Document(out_path)
+    except Exception:
+        return
+
+    body = doc.element.body
+    def element_text(el) -> str:
+        return "".join(el.itertext())
+
+    to_remove = []
+    body_started = False
+    skip_liq = False
+    skip_geo = False
+    for el in list(body):
+        text = element_text(el)
+        text_norm = text.replace(" ", "").replace("　", "")
+
+        # remove debug-like list output
+        if text.strip().startswith("[{") or "N_values" in text:
+            to_remove.append(el)
+            continue
+
+        if "１．調査概要" in text_norm:
+            body_started = True
+
+        # remove liquefaction block between 5-1 and 5-2 (body only)
+        if body_started and ("５－１" in text_norm or "5－1" in text_norm or "5-1" in text_norm):
+            skip_liq = True
+            to_remove.append(el)
+            continue
+        if skip_liq:
+            if "５－２" in text_norm or "5－2" in text_norm or "5-2" in text_norm or "支持層" in text_norm:
+                skip_liq = False
+                # keep this heading
+            else:
+                to_remove.append(el)
+                continue
+
+        # remove geology overview block between 3.* and 4.*
+        if body_started and "３．調査地周辺地形地質概要" in text_norm:
+            skip_geo = True
+            to_remove.append(el)
+            continue
+        if skip_geo:
+            if text_norm.startswith("４．調査結果") or "４．調査結果" in text_norm:
+                skip_geo = False
+            else:
+                to_remove.append(el)
+                continue
+
+        # remove any remaining paragraph/table mentioning liquefaction
+        if "液状化" in text_norm:
+            to_remove.append(el)
+
+    for el in to_remove:
+        body.remove(el)
+
+    try:
+        doc.save(out_path)
+    except Exception:
+        pass
+
+
+def _ensure_chapter_page_breaks(out_path: str):
+    """章見出しの前に改ページを挿入（先頭章は除く）"""
+    from docx import Document
+    from docx.enum.text import WD_BREAK
+
+    try:
+        doc = Document(out_path)
+    except Exception:
+        return
+
+    headings = ("１．", "2．", "３．", "４．", "５．", "1.", "2.", "3.", "4.", "5.")
+    first_seen = False
+    for para in doc.paragraphs:
+        text = (para.text or "").strip()
+        if any(text.startswith(h) for h in headings):
+            if not first_seen:
+                first_seen = True
+                continue
+            run = para.insert_paragraph_before().add_run()
+            run.add_break(WD_BREAK.PAGE)
+    try:
+        doc.save(out_path)
+    except Exception:
+        pass

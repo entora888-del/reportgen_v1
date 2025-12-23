@@ -53,7 +53,7 @@ SECTION_PROMPTS: dict[str, dict[str, str]] = {
 class AIOptions:
     enabled: bool = False
     api_key: str | None = None
-    model: str = "gpt-4o-mini"
+    model: str = "gpt-5.2"
     temperature: float = 0.2
     target_sections: tuple[str, ...] = field(
         default_factory=lambda: tuple(SECTION_PROMPTS.keys())

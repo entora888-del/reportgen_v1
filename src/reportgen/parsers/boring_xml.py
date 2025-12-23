@@ -33,6 +33,34 @@ def _text(root, xpath):
     v = root.findtext(xpath)
     return v.strip() if v else ""
 
+
+def _parse_xml_with_fallback(xml_path: str | Path):
+    """
+    Parse XML with recovery, trying UTF-8 first and then Shift_JIS variants.
+    """
+    path = Path(xml_path)
+
+    # 1) Try default parser (auto-detect)
+    try:
+        return etree.parse(str(path), etree.XMLParser(recover=True)).getroot()
+    except (UnicodeDecodeError, etree.XMLSyntaxError):
+        pass
+
+    # 2) Try Shift_JIS/CP932 decodes and re-parse as UTF-8
+    raw = path.read_bytes()
+    for enc in ("shift_jis", "cp932", "shift_jisx0213"):
+        try:
+            text = raw.decode(enc, errors="replace")
+        except UnicodeDecodeError:
+            continue
+        try:
+            return etree.fromstring(text.encode("utf-8"), parser=etree.XMLParser(recover=True))
+        except etree.XMLSyntaxError:
+            continue
+
+    # If still failing, raise a descriptive error
+    raise etree.XMLSyntaxError("XML decoding failed (tried UTF-8 and Shift_JIS family)", 0, 0, 0, 0)
+
 def _dms_to_decimal(deg: str | float | None, minute: str | float | None, second: str | float | None) -> Optional[float]:
     try:
         d = float(deg)
@@ -48,7 +76,7 @@ def extract_latlon_from_xml(xml_path: str | Path) -> Optional[Tuple[float, float
     """
     Returns (lat, lon) in decimal degrees if the XML contains 経度緯度情報.
     """
-    root = etree.parse(str(xml_path)).getroot()
+    root = _parse_xml_with_fallback(xml_path)
     lon_deg = _text(root, ".//経度緯度情報/経度_度")
     lon_min = _text(root, ".//経度緯度情報/経度_分")
     lon_sec = _text(root, ".//経度緯度情報/経度_秒")
@@ -64,7 +92,7 @@ def extract_latlon_from_xml(xml_path: str | Path) -> Optional[Tuple[float, float
     return (lat, lon)
 
 def extract_cover_from_xml(xml_path: str | Path) -> dict:
-    root = etree.parse(str(xml_path)).getroot()
+    root = _parse_xml_with_fallback(xml_path)
     title = _text(root, ".//標題情報/調査基本情報/調査名")
     start = _text(root, ".//標題情報/調査期間/調査期間_開始年月日")
     ym = ""
@@ -79,7 +107,7 @@ def extract_cover_from_xml(xml_path: str | Path) -> dict:
     }
 
 def extract_report_metadata(xml_path: str | Path) -> dict:
-    root = etree.parse(str(xml_path)).getroot()
+    root = _parse_xml_with_fallback(xml_path)
     start = _text(root, ".//標題情報/調査期間/調査期間_開始年月日")
     end = _text(root, ".//標題情報/調査期間/調査期間_終了年月日")
     address = _text(root, ".//標題情報/調査位置/調査位置住所")
@@ -147,7 +175,7 @@ def parse_boring_xml(xml_path: str | Path) -> dict:
     groundwater: '2.76 m（YYYY-MM-DD 測定）'
     layers: [{name, top, bottom, thickness, observation, N_values}]
     """
-    root = etree.parse(str(xml_path)).getroot()
+    root = _parse_xml_with_fallback(xml_path)
 
     # 地点名
     borehole = _text(root, ".//標題情報/調査基本情報/ボーリング名")
