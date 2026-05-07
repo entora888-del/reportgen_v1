@@ -54,7 +54,6 @@
 │   │   ├── SOURCES.txt
 │   │   └── top_level.txt
 │   ├── aaaa
-│   ├── WSL_SENTINEL.txt
 │   ├── 生成_報告書_5.docx
 │   ├── 生成_報告書_6.docx
 │   ├── 生成_報告書_7.docx

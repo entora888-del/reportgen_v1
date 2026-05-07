@@ -2,6 +2,17 @@
 
 地質調査報告書の自動生成ツールと、国土地理院/国交省データを併用したレポート補助機能の試作リポジトリです。
 
+## Windows 運用
+- このリポジトリの正本は Windows 側の作業フォルダです。以後は `C:\Users\entor\Documents\030.work\101.pdf2doc\reportgen_v1` を使ってください。
+- 以後の標準運用は Windows ネイティブです。`.venv` は Windows 用 `Scripts/` 構成で管理し、WSL 用 `bin/` 構成は使いません。
+- 初回セットアップまたは `.venv` 作り直しは PowerShell で `.\scripts\build_win.ps1 -RecreateVenv -InstallDeps` を実行してください。
+- GUI 起動は `.\scripts\build_win.ps1 -RunGui`、テスト実行は `.\scripts\build_win.ps1 -RunTests` を使ってください。
+- GUI の起動スモークテストは `.\scripts\build_win.ps1 -SmokeGui` を使ってください。
+- サンプル比較は `.\scripts\build_win.ps1 -CompareSamples`、単発生成は `.\scripts\build_win.ps1 -SampleXml <XML> -SampleOut <DOCX>` を使ってください。
+- 完全移行の確認は `docs/windows_migration_checklist.md` を基準に進めてください。
+- 現時点の検証結果は `docs/windows_migration_status.md` に記録しています。
+- 別PCへ移すときは `docs/move_to_another_pc.md` と `.\scripts\export_for_pc_move.ps1` / `.\scripts\setup_on_new_pc.ps1` を使ってください。
+
 ## 最近の更新（2025-12-24）
 - GUI を整理し、XML/PDF/テンプレ/出力先のドラッグ＆ドロップを追加
 - 同梱テンプレの自動探索とユーザー上書きテンプレの優先読み込みに対応
@@ -9,7 +20,7 @@
 - 5万図簿冊ダウンロードパネルを追加し、インデックス自動検出・住所フォールバック・保存先/候補数の環境変数をサポート
 
 ## GUI の使い方（MVP）
-1. 起動: `python -m src.reportgen.gui.app`  
+1. 起動: `.\scripts\build_win.ps1 -RunGui`  
    - 既定出力先: `./output/生成_報告書.docx`（環境変数 `REPORTGEN_OUT_DIR` で変更可）
 2. 入力:  
    - XML（必須）をドラッグ＆ドロップまたは「参照」で指定  
@@ -45,19 +56,19 @@
 1. **四隅座標の取得**  
    - `tools/scrape_gsi_50k_corners.py` が国土地理院サイト（5万・2.5万 対照表）を巡回し、5万図葉ごとの四隅緯度経度を `tmp/50k_corners.csv` に書き出します。  
    - オフライン環境のため DNS 解決で失敗し、現状は 10 図葉分のダミー座標（`offline-sample`）で `tmp/50k_corners.csv` を作成しています。オンライン環境では次のコマンドで全量取得してください。  
-     ```bash
-     python tools/scrape_gsi_50k_corners.py --out tmp/50k_corners.csv --log
+     ```powershell
+     .\.venv\Scripts\python.exe .\tools\scrape_gsi_50k_corners.py --out .\tmp\50k_corners.csv --log
      ```
 2. **ポリゴン化と検証**  
    - `tools/build_50k_index.py` が CSV を読み込み、UL→UR→LR→LL→UL のポリゴンを生成、自己交差補正・面積検査を実施して GeoJSON/GPKG/メタ情報を `data/indices/` に出力します。  
    - 実行例（今回の暫定デモでも実行済み）  
-     ```bash
-     python tools/build_50k_index.py \
-       --src tmp/50k_corners.csv \
-       --datum wgs84 \
-       --out-dir data/indices \
-       --layer-name index_50k \
-       --source-text "GSI 5万/2.5万 対照表(索引図)" \
+     ```powershell
+     .\.venv\Scripts\python.exe .\tools\build_50k_index.py `
+       --src .\tmp\50k_corners.csv `
+       --datum wgs84 `
+       --out-dir .\data\indices `
+       --layer-name index_50k `
+       --source-text "GSI 5万/2.5万 対照表(索引図)" `
        --source-url "https://www.gsi.go.jp/MAP/NEWOLDBL/25000-50000/index25000-50000.html"
      ```
    - 結果ファイル  
@@ -72,9 +83,9 @@
 - 本来は `https://nlftp.mlit.go.jp/kokjo/tochimizu/F3/data/pdf/{code}t.pdf` から直接ダウンロードします。  
 - オフライン環境のため、`data/booklets/2806t.pdf` は Pillow で生成したプレースホルダPDFです。  
 - `data/booklets/manifest.json` に MD5/サイズ/ステータスを記録してあるので、ネットワーク接続後に本物の t.pdf へ差し替えてください。ダウンロードコマンド例：
-  ```bash
-  curl -o data/booklets/2806t.pdf \
-       https://nlftp.mlit.go.jp/kokjo/tochimizu/F3/data/pdf/2806t.pdf
+  ```powershell
+  curl.exe -o data/booklets/2806t.pdf `
+      https://nlftp.mlit.go.jp/kokjo/tochimizu/F3/data/pdf/2806t.pdf
   ```
   取得後に `manifest.json` を更新し、`status` を `downloaded` に変更してください。
 

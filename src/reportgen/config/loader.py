@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
+from copy import deepcopy
 
 
 _DEFAULT_SETTINGS: dict[str, Any] = {
@@ -73,6 +74,31 @@ def _load_json_settings(path: Path) -> Dict[str, Any]:
     except json.JSONDecodeError:
         pass
     return {}
+
+
+def settings_path() -> Path:
+    """設定ファイル（settings.json）のパスを返す"""
+    return Path(__file__).resolve().parent / "settings.json"
+
+
+def save_company_settings(address: str, tel: str, fax: str) -> None:
+    """
+    会社情報のみを更新して settings.json に保存する。
+    他セクションは上書きしない。
+    """
+    path = settings_path()
+    raw = _load_json_settings(path)
+    if not raw:
+        raw = deepcopy(_DEFAULT_SETTINGS)
+    else:
+        raw = _DEFAULT_SETTINGS | raw
+    raw["company"] = {
+        "address": str(address or "").strip(),
+        "tel": str(tel or "").strip(),
+        "fax": str(fax or "").strip(),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def load_settings() -> Settings:

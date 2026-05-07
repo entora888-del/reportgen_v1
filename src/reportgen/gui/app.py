@@ -6,7 +6,8 @@ from PySide6.QtGui import QIcon, QGuiApplication, QFont
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFileDialog, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QTextBrowser, QMessageBox, QGroupBox,
-    QGridLayout, QCheckBox, QSizePolicy, QStyle, QScrollArea, QComboBox
+    QGridLayout, QCheckBox, QSizePolicy, QStyle, QScrollArea, QComboBox,
+    QDialog, QDialogButtonBox, QFormLayout
 )
 
 from reportgen.parsers.liquefaction_pdf import summarize_liquefaction_pdf
@@ -23,6 +24,7 @@ from reportgen.nlftp.fetcher import (
     fetch_booklets,
 )
 from reportgen.ai import AIOptions
+from reportgen.config.loader import load_settings, save_company_settings
 
 ASSETS_DIR = Path(__file__).resolve().parents[1] / "assets"
 DEFAULT_ICON = ASSETS_DIR / "reportgen_icon.png"
@@ -151,6 +153,48 @@ class ModelFetchWorker(QObject):
         if "mini" in model_id:
             return f"{model_id}（軽量）"
         return model_id
+
+
+class SettingsDialog(QDialog):
+    """アプリ設定（会社情報）の簡易ダイアログ"""
+
+    def __init__(self, address: str, tel: str, fax: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("設定")
+        self.setModal(True)
+        self.setMinimumWidth(520)
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight)
+        form.setFormAlignment(Qt.AlignTop)
+        form.setVerticalSpacing(12)
+
+        self.ed_address = QLineEdit(address)
+        self.ed_address.setPlaceholderText("例）大阪府大阪市〇〇区〇〇 1-2-3")
+        form.addRow("会社住所", self.ed_address)
+
+        self.ed_tel = QLineEdit(tel)
+        self.ed_tel.setPlaceholderText("例）(06)1234-5678")
+        form.addRow("TEL", self.ed_tel)
+
+        self.ed_fax = QLineEdit(fax)
+        self.ed_fax.setPlaceholderText("例）(06)1234-5679")
+        form.addRow("FAX", self.ed_fax)
+
+        layout.addLayout(form)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns, 0, Qt.AlignRight)
+
+    def values(self) -> tuple[str, str, str]:
+        return (
+            self.ed_address.text().strip(),
+            self.ed_tel.text().strip(),
+            self.ed_fax.text().strip(),
+        )
 
 
 class MainWindow(QMainWindow):
@@ -444,6 +488,23 @@ class MainWindow(QMainWindow):
             self.ed_booklet_index.setText(f)
             self.booklet_index_path = Path(f)
             self._update_booklet_paths_label()
+
+    def _open_settings_dialog(self):
+        current = load_settings().company
+        dlg = SettingsDialog(
+            address=current.address,
+            tel=current.tel,
+            fax=current.fax,
+            parent=self,
+        )
+        if dlg.exec() == QDialog.Accepted:
+            address, tel, fax = dlg.values()
+            try:
+                save_company_settings(address, tel, fax)
+            except Exception as exc:
+                QMessageBox.critical(self, "設定の保存に失敗しました", str(exc))
+                return
+            QMessageBox.information(self, "設定を保存しました", "会社情報を保存しました。")
 
     def _gather_ai_options(self) -> AIOptions | None:
         if not self.chk_ai_enable.isChecked():
@@ -879,6 +940,13 @@ class MainWindow(QMainWindow):
         text_block.addWidget(subtitle)
         layout.addLayout(text_block, 1)
 
+        settings_btn = QPushButton("設定")
+        settings_btn.setObjectName("ghostButton")
+        settings_btn.setIcon(self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
+        settings_btn.setMinimumHeight(44)
+        settings_btn.clicked.connect(self._open_settings_dialog)
+        layout.addWidget(settings_btn, 0, Qt.AlignTop)
+
         layout.addStretch(1)
         return layout
 
@@ -971,6 +1039,15 @@ class MainWindow(QMainWindow):
                 border-radius: 8px;
                 padding: 16px 30px;
                 font-size: 19px;
+            }
+            QPushButton#ghostButton {
+                background-color: #e8ecf7;
+                color: #24324b;
+                border: 1px solid #d5dae4;
+                font-weight: 600;
+            }
+            QPushButton#ghostButton:hover {
+                background-color: #dfe5f5;
             }
             QPushButton#primaryButton {
                 background-color: #4d7cff;

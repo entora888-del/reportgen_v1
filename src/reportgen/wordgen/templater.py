@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import unicodedata
 from typing import TYPE_CHECKING, Callable
 
 from reportgen.config.loader import load_settings
@@ -93,8 +94,21 @@ def build_context_from_inputs(
         header_full = f"{number}{title}"
         return number, title, header_full
 
+    def _build_n_sentence(name: str, n_values: list[int]) -> str:
+        if not n_values:
+            return ""
+        n_min = min(n_values)
+        n_max = max(n_values)
+        n_text = str(n_min) if n_min == n_max else f"{n_min}～{n_max}"
+        if "盛土" in name:
+            return f"　標準貫入試験では、N={n_text}を記録する。"
+        grade_text, suffix = _classify_layer(name, n_values)
+        if grade_text:
+            return f"　標準貫入試験では、N={n_text}を記録し「{grade_text}」{suffix}"
+        return f"　標準貫入試験では、N={n_text}を記録する。"
+
     def _normalize_sentence(text: str) -> list[str]:
-        text = text.replace("¥n", "\n")
+        text = unicodedata.normalize("NFKC", text or "").replace("¥n", "\n")
         sentences = []
         for line in text.splitlines():
             line = line.strip()
@@ -105,6 +119,133 @@ def build_context_from_inputs(
             sentences.append(line)
         return sentences
 
+    def _polish_fragment(text: str) -> str:
+        """軽微な表記ゆれを整える。"""
+        t = unicodedata.normalize("NFKC", text or "").strip()
+        t = t.replace("〜", "～")
+        t = t.replace("土間Co", "土間コンクリート")
+        t = t.replace("土間co", "土間コンクリート")
+        if "土間コンクリート" in t and "覆われ" not in t and "覆う" not in t:
+            t = t.rstrip("。") + "に覆われ"
+
+        replacements = {
+            "含水少位": "含水は少なく",
+            "含水少": "含水は少なく",
+            "含水中位": "含水は中位",
+            "含水多い": "含水は多い",
+            "含水多": "含水は多く",
+            "粘性弱い": "粘性は弱い",
+            "粘性強い": "粘性は強い",
+            "反応有": "反応がある",
+            "反応あり": "反応がある",
+            "反応無し": "反応はない",
+        }
+        for src, dest in replacements.items():
+            t = t.replace(src, dest)
+        if "溶液反応がある" in t:
+            t = t.replace("溶液反応がある", "溶液に反応がある")
+        if t.endswith("が主体。"):
+            t = t.removesuffix("が主体。") + "を主体とする。"
+        elif t.endswith("主体。"):
+            t = t.removesuffix("主体。") + "を主体とする。"
+        elif t.endswith("が主体"):
+            t = t.removesuffix("が主体") + "を主体とする"
+        elif t.endswith("主体"):
+            if not t.endswith("を主体とする"):
+                t = t.removesuffix("主体") + "を主体とする"
+        if t.endswith("混入。"):
+            t = t[:-1] + "する。"
+        elif t.endswith("混入"):
+            t = t + "する"
+        return t
+
+    def _layer_phrase(name: str) -> str:
+        base = unicodedata.normalize("NFKC", name or "").strip()
+        base = base.replace("混り", "混じり")
+        if "(盛土" in base or "（盛土" in base or "盛土" in base:
+            if "による" not in base:
+                base = base.replace("(盛土)", "").replace("（盛土）", "")
+                base = base.rstrip("層")
+                base = f"{base}による盛土"
+        elif base and not base.endswith(("層", "土")):
+            base = f"{base}層"
+        return base
+
+    def _compose_observation_text(sentences: list[str], layer_name: str) -> str:
+        polished = [_polish_fragment(s) for s in sentences]
+
+        lead_prefix = ""
+        if polished and not any(key in polished[0] for key in ("主体とする", "盛土", "層")):
+            lead_prefix = polished[0].rstrip("。")
+            polished = polished[1:]
+
+        base_idx = None
+        for idx, s in enumerate(polished):
+            if "盛土" in s or "層" in s or (layer_name and layer_name in s):
+                base_idx = idx
+                break
+        modifier_idx = None
+        for idx, s in enumerate(polished):
+            if idx == base_idx:
+                continue
+            if "主体とする" in s or s.endswith("主体"):
+                modifier_idx = idx
+                break
+
+        used: set[int] = set()
+        layer_text = _layer_phrase(layer_name)
+        base_phrase = ""
+        if base_idx is not None:
+            base_phrase = polished[base_idx].rstrip("。")
+            used.add(base_idx)
+        else:
+            base_phrase = layer_text
+
+        modifier_phrase = ""
+        if modifier_idx is not None:
+            modifier_phrase = polished[modifier_idx].rstrip("。")
+            used.add(modifier_idx)
+
+        if base_phrase and layer_text and not any(key in base_phrase for key in ("盛土", "層")):
+            if not base_phrase.endswith(layer_text):
+                base_phrase = f"{base_phrase}{layer_text}"
+
+        pieces = [p for p in (lead_prefix, modifier_phrase, base_phrase) if p]
+        if not pieces and polished:
+            pieces = [polished[0].rstrip("。")]
+            used.add(0)
+
+        if not pieces:
+            return ""
+
+        first_sentence = f"本層は、{''.join(pieces)}"
+        if not first_sentence.endswith(("である。", "です。", "であった。", "する。", "ない。")):
+            first_sentence = first_sentence.rstrip("。") + "である。"
+
+        remaining: list[str] = []
+        for idx, s in enumerate(polished):
+            if idx in used:
+                continue
+            text = s.strip()
+            if not text:
+                continue
+            if not text.endswith("。"):
+                text += "。"
+            remaining.append(text)
+
+        sentences_all = ["　" + first_sentence]
+        for text in remaining:
+            if not text.startswith("　"):
+                text = "　" + text
+            sentences_all.append(text)
+        return "".join(sentences_all)
+
+    def _build_observation_text(raw_text: str, layer_name: str) -> str:
+        sentences = _normalize_sentence(raw_text)
+        if not sentences:
+            return ""
+        return _compose_observation_text(sentences, layer_name)
+
     layer_entries: list[dict[str, str]] = []
     for idx, layer in enumerate(layers):
         name = layer.get("name", "")
@@ -112,45 +253,9 @@ def build_context_from_inputs(
         bottom = layer.get("bottom")
         thickness = layer.get("thickness")
         number, title, header_full = _format_header(idx, name, top, bottom, thickness)
-        section_lines = [header_full]
-
         n_values = [int(v) for v in layer.get("N_values", []) if v is not None]
-        n_sentence = ""
-        if n_values:
-            n_min = min(n_values)
-            n_max = max(n_values)
-            n_text = str(n_min) if n_min == n_max else f"{n_min}～{n_max}"
-            if "盛土" in name:
-                n_sentence = f"　標準貫入試験では、N={n_text}を記録する。"
-            else:
-                grade_text, suffix = _classify_layer(name, n_values)
-                if grade_text:
-                    n_sentence = f"　標準貫入試験では、N={n_text}を記録し「{grade_text}」{suffix}"
-                else:
-                    n_sentence = f"　標準貫入試験では、N={n_text}を記録する。"
-            if n_sentence:
-                section_lines.append(n_sentence)
-
-        obs_sentences = _normalize_sentence(layer.get("observation", ""))
-        observation_text = ""
-        if obs_sentences:
-            first_sentence = obs_sentences[0]
-            if not first_sentence.startswith("本層"):
-                first_sentence = f"本層は、{first_sentence}"
-            observation_text = f"　{first_sentence}"
-            for sentence in obs_sentences[1:]:
-                observation_text += f"　{sentence}"
-            section_lines.append(observation_text)
-        else:
-            depth_text = ""
-            if top is not None and bottom is not None:
-                depth_text = f"（GL-{top:.2f}～{bottom:.2f}m）"
-            base = f"　本層は、{name}{depth_text}で構成される。"
-            if n_sentence:
-                base = base.rstrip("。")
-                base += n_sentence
-            observation_text = base
-            section_lines.append(observation_text)
+        n_sentence = _build_n_sentence(name, n_values)
+        observation_text = _build_observation_text(layer.get("observation", ""), name)
 
         layer_entries.append(
             {
@@ -384,11 +489,8 @@ def generate_docx_from_template(
         elif has_liq:
             tpl_path = resolve_template_path(None)
         else:
-            # 非液状化では「正解」テンプレがあれば優先、無ければ旧版
-            try:
-                tpl_path = packaged_template_path("報告書_正解.docx")
-            except FileNotFoundError:
-                tpl_path = packaged_template_path("報告書_ひな形.docx")
+            # 非液状化は常に標準ひな形を使用
+            tpl_path = packaged_template_path("報告書_ひな形.docx")
 
     doc = DocxTemplate(str(tpl_path))
     doc.render(context)

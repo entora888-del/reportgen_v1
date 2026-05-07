@@ -26,7 +26,7 @@
   - 画像/テンプレ: `pillow`, `docxtpl`, `python-docx`  
   - コメントとして `tabula-py`, `pytesseract` を将来追加候補に言及。
 - **ビルド/配布**  
-  - `scripts/build_win.ps1` は空、`[tool.pyinstaller]` もメモのみ。現時点ではローカル実行主体で、PyInstaller ベースの配布は未着手。  
+  - `scripts/build_win.ps1` は Windows 用の仮想環境再作成・依存導入・GUI起動・テスト実行をまとめた運用スクリプト。PyInstaller ベースの配布は未着手。  
   - `build/` および `dist/` は空。今後のバンドル成果物置き場として確保済み。
 
 ## 3. アプリケーション構成（主要ディレクトリと責務）
@@ -127,7 +127,6 @@
 │   │   ├── SOURCES.txt
 │   │   └── top_level.txt
 │   ├── aaaa
-│   ├── WSL_SENTINEL.txt
 │   ├── 生成_報告書_5.docx
 │   ├── 生成_報告書_6.docx
 │   ├── 生成_報告書_7.docx
